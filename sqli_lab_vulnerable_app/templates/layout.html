@@ -23,7 +23,7 @@
         {% if session.get('role') == 'admin' %}
           <a href="{{ url_for('admin') }}">Admin</a>
         {% endif %}
-        
+
         <span class="nav-user">{{ session.get('username') }} ({{ session.get('role') }})</span>
         <a href="{{ url_for('logout') }}" class="btn-logout">Salir</a>
       </div>
@@ -31,6 +31,7 @@
     {% endif %}
   </nav>
 
+  
   <div class="container">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
