@@ -23,6 +23,9 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import sqlite3
 from pathlib import Path
+from werkzeug.security import generate_password_hash
+from werkzeug.security import check_password_hash
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH  = BASE_DIR / "db" / "lab.db"
@@ -89,9 +92,9 @@ def init_db():
     cur.execute("SELECT COUNT(*) FROM users")
     if cur.fetchone()[0] == 0:
         users = [
-            ("admin",   "Admin123",   "admin"),
-            ("analyst", "Analyst123", "user"),
-            ("student", "Student123", "user"),
+            ("admin",   generate_password_hash("Admin123"),   "admin"),
+            ("analyst", generate_password_hash("Analyst123"), "user"),
+            ("student", generate_password_hash("Student123"), "user"),
         ]
         cur.executemany(
             "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
@@ -162,20 +165,20 @@ def login():
         username = request.form.get("username", "")
         password = request.form.get("password", "")
 
-        # Consulta parametrizada (previene SQL Injection)
-        query = "SELECT id, username, role FROM users WHERE username = ? AND password = ?"
+        # 🔒 Buscar usuario (SIN comparar password en SQL)
+        query = "SELECT id, username, password, role FROM users WHERE username = ?"
 
         conn = get_connection()
         try:
-            user = conn.execute(query, (username, password)).fetchone()
+            user = conn.execute(query, (username,)).fetchone()
         except Exception:
-            # No exponer errores internos
             flash("Error interno del sistema.", "error")
             conn.close()
             return render_template("login.html")
         conn.close()
 
-        if user:
+        # 🔒 Comparación segura del hash
+        if user and check_password_hash(user["password"], password):
             session["user_id"]  = user["id"]
             session["username"] = user["username"]
             session["role"]     = user["role"]
@@ -184,7 +187,6 @@ def login():
             flash("Inicio de sesión exitoso.", "success")
             return redirect(url_for("dashboard"))
 
-        # No registrar queries sensibles
         log_event("LOGIN_FAIL", username, "Intento fallido de login")
         flash("Credenciales incorrectas.", "error")
 
@@ -202,7 +204,19 @@ def dashboard():
         role=session.get("role")
     )
 
-
+# ---------------------------------------------------
+# V-02: SQL INJECTION EN BÚSQUEDA
+# El término de búsqueda se inserta directamente en
+# la consulta con LIKE.
+#
+# Payload para extraer todos los usuarios:
+#   %' UNION SELECT id, username, password, role FROM users --
+#
+# Payload para verificar número de columnas:
+#   %' UNION SELECT 1,2,3,4 --
+# ---------------------------------------------------
+# V-02: Búsqueda vulnerable también en una sola línea.
+# Payload: %' UNION SELECT id, username, password, role FROM users --
 @app.route("/search", methods=["GET", "POST"])
 def search():
     if not session.get("username"):
@@ -216,29 +230,21 @@ def search():
         term = request.form.get("term", "")
 
         # ---------------------------------------------------
-        # V-02: SQL INJECTION EN BÚSQUEDA
-        # El término de búsqueda se inserta directamente en
-        # la consulta con LIKE.
-        #
-        # Payload para extraer todos los usuarios:
-        #   %' UNION SELECT id, username, password, role FROM users --
-        #
-        # Payload para verificar número de columnas:
-        #   %' UNION SELECT 1,2,3,4 --
+        # FIX-02: CORRECCIÓN DE SQL INJECTION EN BÚSQUEDA
+        # Se construye el patrón LIKE en Python con f-string normal,
+        # y se pasa como parámetro con ? — SQLite lo trata como dato,
+        # nunca como código SQL.
         # ---------------------------------------------------
-        # V-02: Búsqueda vulnerable también en una sola línea.
-        # Payload: %' UNION SELECT id, username, password, role FROM users --
-        raw_query = f"SELECT id, title, author, category FROM books WHERE title LIKE '%{term}%' OR author LIKE '%{term}%' OR category LIKE '%{term}%'"
+        safe_term = f"%{term}%"
+        raw_query = "SELECT id, title, author, category FROM books WHERE title LIKE ? OR author LIKE ? OR category LIKE ?"
 
         conn = get_connection()
         try:
-            books = conn.execute(raw_query).fetchall()
+            books = conn.execute(raw_query, (safe_term, safe_term, safe_term)).fetchall()
         except Exception as e:
             flash(f"Error en la base de datos: {e}", "error")
         conn.close()
 
-    # V-06: La consulta SQL cruda se pasa al template y se
-    # muestra en pantalla — expone la estructura interna de la BD.
     return render_template("search.html", books=books, raw_query=raw_query)
 
 
@@ -254,12 +260,18 @@ def admin():
         return redirect(url_for("dashboard"))
 
     conn  = get_connection()
-    users = conn.execute("SELECT id, username, password, role FROM users ORDER BY id").fetchall()
-    logs  = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 20").fetchall()
+
+    # Eliminamos password de la consulta
+    users = conn.execute(
+        "SELECT id, username, role FROM users ORDER BY id"
+    ).fetchall()
+
+    logs  = conn.execute(
+        "SELECT * FROM audit_log ORDER BY id DESC LIMIT 20"
+    ).fetchall()
+
     conn.close()
 
-    # Nota: se incluye la columna password (texto plano) para que
-    # los estudiantes vean claramente la V-03 desde el panel admin.
     return render_template("admin.html", users=users, logs=logs)
 
 
