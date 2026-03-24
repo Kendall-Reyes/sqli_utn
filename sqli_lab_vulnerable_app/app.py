@@ -140,51 +140,52 @@ def index():
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
 
-
+# ---------------------------------------------------
+# V-01: SQL INJECTION EN LOGIN
+# La consulta se construye concatenando directamente
+# el input del usuario sin ningún tipo de validación.
+#
+# Payload de ejemplo que omite la contraseña:
+#   usuario:  admin' --
+#   password: (cualquier cosa)
+#
+# Payload que accede sin conocer ningún usuario:
+#   usuario:  ' OR '1'='1' --
+#   password: (cualquier cosa)
+# ---------------------------------------------------
+# V-01: Consulta vulnerable en UNA SOLA LÍNEA para que el comentario
+# SQL (--) funcione correctamente en SQLite y el payload surta efecto.
+# Payload de ejemplo: usuario = admin' --  / password = (cualquier cosa)
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
 
-        # ---------------------------------------------------
-        # V-01: SQL INJECTION EN LOGIN
-        # La consulta se construye concatenando directamente
-        # el input del usuario sin ningún tipo de validación.
-        #
-        # Payload de ejemplo que omite la contraseña:
-        #   usuario:  admin' --
-        #   password: (cualquier cosa)
-        #
-        # Payload que accede sin conocer ningún usuario:
-        #   usuario:  ' OR '1'='1' --
-        #   password: (cualquier cosa)
-        # ---------------------------------------------------
-        # V-01: Consulta vulnerable en UNA SOLA LÍNEA para que el comentario
-        # SQL (--) funcione correctamente en SQLite y el payload surta efecto.
-        # Payload de ejemplo: usuario = admin' --  / password = (cualquier cosa)
-        query = f"SELECT id, username, role FROM users WHERE username = '{username}' AND password = '{password}'"
+        # Consulta parametrizada (previene SQL Injection)
+        query = "SELECT id, username, role FROM users WHERE username = ? AND password = ?"
 
         conn = get_connection()
         try:
-            user = conn.execute(query).fetchone()
-        except Exception as e:
-            # El error de SQLite se muestra directamente — también
-            # es información sensible que no debe exponerse.
-            flash(f"Error en la base de datos: {e}", "error")
+            user = conn.execute(query, (username, password)).fetchone()
+        except Exception:
+            # No exponer errores internos
+            flash("Error interno del sistema.", "error")
             conn.close()
-            return render_template("login.html", last_query=query)
+            return render_template("login.html")
         conn.close()
 
         if user:
             session["user_id"]  = user["id"]
             session["username"] = user["username"]
             session["role"]     = user["role"]
+
             log_event("LOGIN_OK", user["username"])
             flash("Inicio de sesión exitoso.", "success")
             return redirect(url_for("dashboard"))
 
-        log_event("LOGIN_FAIL", username, f"query={query}")
+        # No registrar queries sensibles
+        log_event("LOGIN_FAIL", username, "Intento fallido de login")
         flash("Credenciales incorrectas.", "error")
 
     return render_template("login.html")
