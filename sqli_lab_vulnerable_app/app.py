@@ -25,6 +25,7 @@ import sqlite3
 from pathlib import Path
 from werkzeug.security import generate_password_hash
 from werkzeug.security import check_password_hash
+import os
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -37,7 +38,7 @@ app = Flask(__name__)
 # En una aplicación real debe cargarse desde una variable de
 # entorno y nunca commitearse al repositorio.
 # ---------------------------------------------------------------
-app.config["SECRET_KEY"] = "dev-secret-key-insegura-1234"
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-fallback-key")
 
 
 # ---------------------------------------------------------------
@@ -245,7 +246,7 @@ def search():
             flash(f"Error en la base de datos: {e}", "error")
         conn.close()
 
-    return render_template("search.html", books=books, raw_query=raw_query)
+    return render_template("search.html", books=books)
 
 
 @app.route("/admin")
@@ -292,4 +293,5 @@ def logout():
 # ---------------------------------------------------------------
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    app.run(host="0.0.0.0", port=5000, debug=debug_mode)
